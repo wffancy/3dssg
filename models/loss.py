@@ -46,7 +46,7 @@ class PerClassBCEFocalLosswithLogits(nn.Module):    # namely multi-label classif
     def forward(self, logits, target):
         # logits: [N, F], target: [1, N]
         logits = torch.sigmoid(logits)
-        loss = torch.zeors(logits.size())
+        loss = torch.zeros(logits.size())
 
         for i, logit in enumerate(logits):
             for j, l in enumerate(logit):

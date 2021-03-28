@@ -10,7 +10,7 @@ CONF.SCALAR.REL_PC_SAMPLE = 3000
 
 # path
 CONF.PATH = EasyDict()
-CONF.PATH.BASE = "E:/wff_ftp_server/3DSGG"
+CONF.PATH.BASE = "/home/vrlab725_wff/Documents/3DSSG/"
 CONF.PATH.DATA = os.path.join(CONF.PATH.BASE, "data/3RScan")
 
 # append to syspath

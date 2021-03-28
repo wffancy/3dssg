@@ -61,6 +61,7 @@ BEST_REPORT_TEMPLATE = """
 [sco.] train_Recall@100_predicate: {top100_predicate}
 """
 
+
 class Solver():
     def __init__(self, model, dataloader, optimizer, stamp, val_step=10,
                  lr_decay_step=None, lr_decay_rate=None, bn_decay_step=None, bn_decay_rate=None):
@@ -154,7 +155,7 @@ class Solver():
                 self._log("epoch {} starting...".format(epoch_id + 1))
 
                 # feed
-                self._feed(self.dataloader["train"], "train", epoch_id)
+                self._feed(self.dataloader["val"], "val", epoch_id)
 
                 # save model
                 self._log("saving last models...\n")
@@ -354,7 +355,7 @@ class Solver():
             # predicate classification: per-class binary cross entropy.
             Focal_Lpred.append(self.rel_criterion(data_dict["predicate_predict"][index][:rel_count], data_dict["predicate_cat"][index][:rel_count]))
 
-        #  PointNet feature transform reguliarzer
+        #  PointNet feature transform regularizer
         mat_diff_loss = 0
         for it in data_dict["trans_feat"]:
             tmp = feature_transform_reguliarzer(it)

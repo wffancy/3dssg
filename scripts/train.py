@@ -24,10 +24,12 @@ D3SSG_VAL = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationsh
 node_color_list = ['aliceblue', 'antiquewhite', 'darkgray', 'lightpink', 'salmon', 'palegreen', 'khaki',
                    'darkkhaki', 'orange']
 
+
 def inplace_relu(m):
     classname = m.__class__.__name__
     if classname.find('ReLU') != -1:
         m.inplace=True
+
 
 def read_class(path):
     file = open(os.path.join(CONF.PATH.DATA, path), 'r')
@@ -39,6 +41,7 @@ def read_class(path):
 
     return word_dict
 
+
 def get_dataloader(args, d3ssg, all_scene_list, split):
     dataset = D3SemanticSceneGraphDataset(
         relationships=d3ssg[split],
@@ -49,6 +52,7 @@ def get_dataloader(args, d3ssg, all_scene_list, split):
                             collate_fn=dataset.collate_fn, num_workers=0)
 
     return dataset, dataloader
+
 
 def get_model(args):
     # initiate model
@@ -64,16 +68,21 @@ def get_model(args):
 
     # to CUDA
     model = model.cuda()
+    # torch.distributed.init_process_group(backend="nccl")
+    # model = torch.nn.parallel.DistributedDataParallel(model)
+
     # Use inplace operations whenever possible
     model.apply(inplace_relu)
 
     return model
+
 
 def get_num_params(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     num_params = int(sum([np.prod(p.size()) for p in model_parameters]))
 
     return num_params
+
 
 def get_solver(args, dataloader):
     model = get_model(args)
@@ -112,6 +121,7 @@ def get_solver(args, dataloader):
 
     return solver, num_params, root
 
+
 def save_info(args, root, num_params, train_dataset, val_dataset):
     info = {}
     for key, value in vars(args).items():
@@ -125,6 +135,7 @@ def save_info(args, root, num_params, train_dataset, val_dataset):
 
     with open(os.path.join(root, "info.json"), "w") as f:
         json.dump(info, f, indent=4)
+
 
 def get_3dssg(d3ssg_train, d3ssg_val, num_scans):
     # get initial scan list
@@ -152,14 +163,16 @@ def get_3dssg(d3ssg_train, d3ssg_val, num_scans):
 
     return new_3dssg_train, new_3dssg_val, train_scan_list, val_scan_list
 
+
 def visualize(data_dict, model, obj_dict, pred_dict):
     scan_id = data_dict["scan_id"][0]  # here batch_size can only equal 1, or will make error
     ids = data_dict["objects_id"][0]
     gt_obj = data_dict["objects_cat"][0]
     gt_rel = data_dict["triples"][0]
+    rel_pairs = data_dict["pairs"][0]
     # used for evaluation
-    count1 = 0
-    count2 = 0
+    precision_obj = 0
+    precision_rel = 0
     cls_list = []
     pred_list = []
 
@@ -177,7 +190,6 @@ def visualize(data_dict, model, obj_dict, pred_dict):
         rel_pred = data_dict["predicate_predict"][0]
 
         obj_pred_cls = torch.argmax(obj_pred, dim=1)
-        rel_pred_cls = torch.argmax(rel_pred, dim=1)
         g1.attr('node', shape='oval', fontname='Sans')
         for index, i in enumerate(obj_pred_cls):
             cls_list.append(i)
@@ -187,35 +199,39 @@ def visualize(data_dict, model, obj_dict, pred_dict):
             g1.node(id + '_', cls)
             idx += 1
 
+        pred_cls_num = rel_pred.size(1)
         g1.attr('edge', fontname='Sans', color='black', style='filled')
-        for index, i in enumerate(rel_pred_cls):
-            pred_list.append(i)
-            s, o, _ = gt_rel[index]
-            if s == o or i.item()==0:
-                continue
-            g1.edge(str(s.item()) + '_', str(o.item()) + '_', pred_dict[i.item()])
+        for index, i in enumerate(rel_pred):
+            for j in range(pred_cls_num):
+                if i[j] >= 0.5:
+                    pred_list.append(rel_pairs[index] + [j])
+                    s, o = rel_pairs[index]
+                    if s == o or j == 0:
+                        continue
+                    g1.edge(str(s.item()) + '_', str(o.item()) + '_', pred_dict[j])
 
     with dot.subgraph(name='cluster_GT') as g2:
         g2.attr(label='ground truth')
         g2.attr('node', shape='oval', fontname='Sans')
         for index, v in enumerate(gt_obj):
             if cls_list[index] == v:
-                count1 += 1
+                precision_obj += 1
             id = str(ids[index].item())
             g2.attr('node', fillcolor=node_color_list[index], style='filled')
             g2.node(id, obj_dict[v])
 
         g2.attr('edge', fontname='Sans', color='black', style='filled')
-        for index, item in enumerate(gt_rel):
+        for item in gt_rel:
             s, o, p = item
-            if pred_list[index] == p:
-                count2 += 1
-            if s == o or p.item()==0:
+            if item.numpy().tolist() in pred_list:
+                precision_rel += 1
+            if s == o or p.item() == 0:
                 continue
             g2.edge(str(s.item()), str(o.item()), pred_dict[p.item()])
 
     # print(dot.source)
-    dot.render(filename=os.path.join(CONF.PATH.BASE, 'vis/{}/SG_{:.2f}_{:.2f}.gv'.format(scan_id, count1/len(gt_obj), count2/len(gt_rel))))
+    dot.render(filename=os.path.join(CONF.PATH.BASE, 'vis/{}/SG_{:.2f}_{:.2f}.gv'.format(scan_id, precision_obj/len(gt_obj), precision_rel/len(gt_rel))))
+
 
 def train(args):
     # init training dataset
@@ -262,28 +278,30 @@ def train(args):
         print("initializing...")
         solver, num_params, root = get_solver(args, dataloader)
 
-        print("Start training...\n")
+        print("start training...\n")
         save_info(args, root, num_params, train_dataset, val_dataset)
         solver(args.epoch, args.verbose)
         print("finished training.")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu", type=str, help="gpu", default="0")
+    # parser.add_argument("--gpu", type=str, help="gpu", default="0")
     parser.add_argument("--scene_num", type=int, help="number of scenes", default=-1)
-    parser.add_argument("--batch_size", type=int, help="batch size", default=2)
+    parser.add_argument("--batch_size", type=int, help="batch size", default=1)
     parser.add_argument("--epoch", type=int, help="number of epochs", default=50)
     parser.add_argument("--verbose", type=int, help="iterations of showing verbose", default=10)    # train iter
-    parser.add_argument("--val_step", type=int, help="iterations of validating", default=100) # val iter
+    parser.add_argument("--val_step", type=int, help="iterations of validating", default=100)   # val iter
     parser.add_argument("--use_pretrained", type=str, help="Specify the folder name containing the pretrained detection module.")
     parser.add_argument("--use_checkpoint", type=str, help="Specify the checkpoint root", default="")
     parser.add_argument("--lr", type=float, help="learning rate", default=1e-4)
     parser.add_argument("--wd", type=float, help="weight decay", default=1e-5)
     parser.add_argument("--seed", type=int, default=42, help="random seed")
     parser.add_argument("--vis", action="store_true", help="render visualization result")
+    parser.add_argument("--local_rank", type=int, default=0)
     args = parser.parse_args()
     # setting
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
     # reproducibility
     torch.manual_seed(args.seed)

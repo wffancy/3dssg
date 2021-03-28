@@ -14,14 +14,13 @@ from lib.config import CONF
 MAX_OBJECTS_NUM = 9
 MAX_REL_NUM = 72    # actually 57
 
+
 class D3SemanticSceneGraphDataset(Dataset):
 
     def __init__(self, relationships, all_scan_id,
                  split="train",
                  augment=False):
-        '''
-        target: obtain all data path and split into train/val/test set
-        '''
+        ''' target: obtain all data path and split into train/val/test set '''
         self.relationships = relationships # all relationships and classes
         # all scan id, include split id in scan id
         self.all_scan_id = all_scan_id
@@ -60,9 +59,10 @@ class D3SemanticSceneGraphDataset(Dataset):
             for i in range(batch_size):
                 new_value_list.append(data[i][key])
         else:
-            # l_list = [int(len(one_line[key])) for one_line in data]
-            # max_l = np.array(l_list).max()
-            max_l = MAX_OBJECTS_NUM if 'object' in key else MAX_REL_NUM
+            l_list = [int(len(one_line[key])) for one_line in data]
+            max_l = np.array(l_list).max()
+            max_l = max(max_l, MAX_OBJECTS_NUM if 'object' in key else MAX_REL_NUM)
+            # max_l = MAX_OBJECTS_NUM if 'object' in key else MAX_REL_NUM
             new_value_list = []
             for i in range(batch_size):
                 assert data[i][key].ndim >= 1
@@ -138,11 +138,12 @@ class D3SemanticSceneGraphDataset(Dataset):
 
         return data_dict
 
+
 if __name__ == "__main__":
-    scans = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationships_train.json")))["scans"]
+    scans = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationships_validation.json")))["scans"]
     max_objects_num = 0
     max_rel_num = 0
     for scan in scans:
         max_objects_num = max(max_objects_num, len(scan["objects"]))
         max_rel_num = max(max_rel_num, len(scan["relationships"]))
-    print(max_objects_num, max_rel_num) # 9 57
+    print(max_objects_num, max_rel_num)  # 9 57

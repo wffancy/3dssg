@@ -24,21 +24,39 @@ def get_eval(data_dict):
         object_pred = data_dict["objects_predict"][i]
         object_cat = data_dict["objects_cat"][i]
 
-        predicate_pred = data_dict["predicate_predict"][i]
+        # here, need to notice the relationships between keys 'edges', 'pairs' and 'triples'
+        # 'pairs' is the none duplicate list of the first two column of 'triples', while 'edges' corresponds to the index
+        # the 'predicate_predicate' takes the mapping relation with 'pairs'
+        predicate_count = data_dict["predicate_count"][i]
+        predicate_pred = data_dict["predicate_predict"][i][:predicate_count]
+        pairs = data_dict["pairs"][i]
         triples = data_dict["triples"][i]
-        predicate_cat = triples[:,2]
+        # filter out all 0 rows
+        zero_rows = torch.tensor([0, 0, 0]).expand_as(triples).cuda()
+        mask = (triples == zero_rows)[:, :2]
+        mask = mask[:, 0] & mask[:, 1]
+        mask = mask ^ torch.tensor([True]).expand_as(mask).cuda()
+        triples = triples[mask]
+
+        predicate_cat = triples[:, 2]
+        predicate_pred_expand = torch.empty([triples.size(0), predicate_pred.size(1)]).cuda()
+        for index, triple in enumerate(triples):
+            tmp = triple[:2].expand_as(pairs)
+            mask = pairs == tmp
+            mask = mask[:, 0] & mask[:, 1]
+            predicate_pred_expand[index] = predicate_pred[mask]
 
         top5_ratio_o.append(topk_ratio(object_pred, object_cat, 5))
         top10_ratio_o.append(topk_ratio(object_pred, object_cat, 10))
-        top3_ratio_r.append(topk_ratio(predicate_pred, predicate_cat, 3))
-        top5_ratio_r.append(topk_ratio(predicate_pred, predicate_cat, 5))
+        top3_ratio_r.append(topk_ratio(predicate_pred_expand, predicate_cat, 3))
+        top5_ratio_r.append(topk_ratio(predicate_pred_expand, predicate_cat, 5))
 
         edges = data_dict["edges"][i]  # store the index
         object_conf, _ = torch.topk(object_pred, 1, 1)
         object_conf = object_conf.squeeze(-1)
         for x in range(predicate_pred.size(0)):
             for y in range(predicate_pred.size(1)):
-                if x==0 and y==0:
+                if x == 0 and y == 0:
                     triple_scores = np.array([[object_conf[edges[x,0]] * object_conf[edges[x,1]] * predicate_pred[x,y], triples[x,0], triples[x,1], y]])
                 else:
                     t = np.array([[object_conf[edges[x,0]] * object_conf[edges[x,1]] * predicate_pred[x,y], triples[x,0], triples[x,1], y]])
@@ -74,7 +92,7 @@ def topk_ratio(logits, category, k):
     for index, x in enumerate(topk_pred):
         if category[index] in x:
             topk_ratio += 1
-    topk_ratio /= topk_pred.size(0)
+    topk_ratio /= category.size(0)
     return topk_ratio
 
 def topk_triplet(score, triples, k):
@@ -99,5 +117,5 @@ def topk_triplet(score, triples, k):
         t = [s, o, p]
         if t in triplets:
             ratio += 1
-    ratio /= k
+    ratio /= len(triples)
     return ratio

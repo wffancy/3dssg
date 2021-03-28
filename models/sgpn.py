@@ -11,11 +11,13 @@ from models.graph import GraphTripleConv, GraphTripleConvNet
 from models.layers import build_mlp
 from lib.config import CONF
 
+
 def get_num_params(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     num_params = int(sum([np.prod(p.size()) for p in model_parameters]))
 
     return num_params
+
 
 def load_pretained_cls_model(model):
     # load pretrained pointnet_cls model [ relPointNet ver. ]
@@ -24,6 +26,7 @@ def load_pretained_cls_model(model):
     pretrained_dict_ = {k[5:]: v for k, v in pretrained_dict.items() if 'feat' in k and v.size() == net_state_dict[k[5:]].size()}
     net_state_dict.update(pretrained_dict_)
     model.load_state_dict(net_state_dict)
+
 
 class SGPN(nn.Module):
     def __init__(self, gconv_dim=128, gconv_hidden_dim=512,
@@ -84,7 +87,7 @@ class SGPN(nn.Module):
         objects_pc = data_dict["objects_pc"]
         objects_count = data_dict["aligned_obj_num"]   # namely 9
         predicate_pc_flag = data_dict["predicate_pc_flag"]
-        predicate_count = data_dict["aligned_rel_num"] # namely 57
+        predicate_count = data_dict["aligned_rel_num"] # namely 72
         edges = data_dict["edges"]
         trans_feat = []
         batch_size = objects_id.size(0)

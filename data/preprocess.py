@@ -1,14 +1,17 @@
+# ATTENTION HERE: since the dataset has some some problem, i have made some modification in the dataset,
+# So if want to transfer the code to another machine, it is necessary to transfer the data meanwhile.
 import os
 import sys
 import json
 import numpy as np
 from plyfile import PlyData
 
-sys.path.append(os.path.join(os.getcwd(), "lib")) # HACK add the lib folder
+sys.path.append(os.path.join(os.getcwd(), "lib"))   # HACK add the lib folder
 from lib.config import CONF
 import multiprocessing
 
 lock = multiprocessing.Lock()
+
 
 def read_ply(filename):
     """ read point cloud from filename PLY file """
@@ -16,6 +19,7 @@ def read_ply(filename):
     pc = plydata['vertex'].data
     pc_array = np.array([[x, y, z, r, g, b, oid, cid, nyu, mpr] for x, y, z, r, g, b, oid, cid, nyu, mpr in pc])
     return pc_array
+
 
 def read_obj(filename):
     """ read point cloud from OBJ file"""
@@ -31,6 +35,7 @@ def read_obj(filename):
         point_cloud = np.array(point_cloud)
     return point_cloud
 
+
 def pc_normalize(pc):
     pc_ = pc[:,:3]
     centroid = np.mean(pc_, axis=0)
@@ -42,6 +47,7 @@ def pc_normalize(pc):
     else:
         pc = pc_
     return pc
+
 
 def farthest_point_sample(point, npoint):
     """
@@ -68,6 +74,7 @@ def farthest_point_sample(point, npoint):
     point = point[centroids.astype(np.int32)]
     return point
 
+
 def judge_obb_intersect(p, obb):
     # judge one point is or not in the obb
     center = np.array(obb["centroid"])
@@ -78,12 +85,19 @@ def judge_obb_intersect(p, obb):
     project_x = axis_x.dot(p - center)
     project_y = axis_y.dot(p - center)
     project_z = axis_z.dot(p - center)
-    return project_x >= -axis_len[0]/2 and project_x <= axis_len[0]/2 \
-           and project_y >= -axis_len[1]/2 and project_y <= axis_len[1]/2 \
-           and project_z >= -axis_len[2]/2 and project_z <= axis_len[2]/2
+    return -axis_len[0]/2 <= project_x <= axis_len[0]/2 and\
+           -axis_len[1]/2 <= project_y <= axis_len[1]/2 and\
+           -axis_len[2]/2 <= project_z <= axis_len[2]/2
+
 
 def process_one_scan(relationships_scan):
     scan_id = relationships_scan["scan"] + "-" + str(hex(relationships_scan["split"]))[-1]
+
+    # # avoid duplicate computing
+    # path = os.path.join(CONF.PATH.R3Scan, "{}/data_dict_{}.json".format(scan_id[:-2], scan_id[-1]))
+    # if os.path.exists(path):
+    #     return
+
     # load class and relationships dict
     word2idx = {}
     index = 0
@@ -164,6 +178,8 @@ def process_one_scan(relationships_scan):
     pairs = []
     relationships_triples = relationships_scan["relationships"]
     for triple in relationships_triples:
+        if (triple[0] not in objects_id) or (triple[1] not in objects_id) or (triple[0] == triple[1]):
+            continue
         triples.append(triple[:3])
         if triple[:2] not in pairs:
             pairs.append(triple[:2])
@@ -174,37 +190,45 @@ def process_one_scan(relationships_scan):
             triples.append([i, j, 0])   # supplement the 'none' relation
             pairs.append(([i, j]))
 
-    union_point_cloud = []
-    predicate_cat = []
-    predicate_num = []
-    for rel in pairs:
-        s, o = rel
-        union_pc = []
-        pred_cls = np.zeros(len(rel2idx))
-        for triple in triples:
-            if rel == triple[:2]:
-                pred_cls[triple[2]] = 1
+    s = 0
+    o = 0
+    try:
+        union_point_cloud = []
+        predicate_cat = []
+        predicate_num = []
+        for rel in pairs:
+            s, o = rel
+            union_pc = []
+            pred_cls = np.zeros(len(rel2idx))
+            for triple in triples:
+                if rel == triple[:2]:
+                    pred_cls[triple[2]] = 1
 
-        for index, point in enumerate(pc_array):
-            if seg_indices[index] not in seg2obj:
-                continue
-            if judge_obb_intersect(point, obb[s]) or judge_obb_intersect(point, obb[o]):
-                if (seg2obj[seg_indices[index]] == s):
-                    point = np.append(point, 1)
-                elif (seg2obj[seg_indices[index]] == o):
-                    point = np.append(point, 2)
-                else:
-                    point = np.append(point, 0)
-                union_pc.append(point)
-        union_point_cloud.append(union_pc)
-        predicate_cat.append(pred_cls.tolist())
-    # sample and normalize point cloud
-    rel_sample = CONF.SCALAR.REL_PC_SAMPLE
-    for index, _ in enumerate(union_point_cloud):
-        pc = np.array(union_point_cloud[index])
-        pc = farthest_point_sample(pc, rel_sample)
-        union_point_cloud[index] = pc_normalize(pc)
-        predicate_num.append(len(pc))
+            for index, point in enumerate(pc_array):
+                if seg_indices[index] not in seg2obj:
+                    continue
+                if judge_obb_intersect(point, obb[s]) or judge_obb_intersect(point, obb[o]):
+                    if seg2obj[seg_indices[index]] == s:
+                        point = np.append(point, 1)
+                    elif seg2obj[seg_indices[index]] == o:
+                        point = np.append(point, 2)
+                    else:
+                        point = np.append(point, 0)
+                    union_pc.append(point)
+            union_point_cloud.append(union_pc)
+            predicate_cat.append(pred_cls.tolist())
+        # sample and normalize point cloud
+        rel_sample = CONF.SCALAR.REL_PC_SAMPLE
+        for index, _ in enumerate(union_point_cloud):
+            pc = np.array(union_point_cloud[index])
+            pc = farthest_point_sample(pc, rel_sample)
+            union_point_cloud[index] = pc_normalize(pc)
+            predicate_num.append(len(pc))
+    except KeyError:
+        print(scan_id)
+        print(obb.keys())
+        print(s, o, '\n')
+        return
 
     predicate_pc_flag = []
     for pc in union_point_cloud:
@@ -213,14 +237,14 @@ def process_one_scan(relationships_scan):
     object_id2idx = {}  # convert object id to the index in the tensor
     for index, v in enumerate(objects_id):
         object_id2idx[v] = index
-    s, o, p = np.split(np.array(triples), 3, axis=1)  # All have shape (T, 1)
-    s, o, p = [np.squeeze(x, axis=1) for x in [s, o, p]]  # Now have shape (T,)
+    s, o = np.split(np.array(pairs), 2, axis=1)  # All have shape (T, 1)
+    s, o = [np.squeeze(x, axis=1) for x in [s, o]]  # Now have shape (T,)
 
     for index, v in enumerate(s):
         s[index] = object_id2idx[v]  # s_idx
     for index, v in enumerate(o):
         o[index] = object_id2idx[v]  # o_idx
-    edges = np.stack((s, o), axis=1)
+    edges = np.stack((s, o), axis=1)    # edges is used for the input of the GCN module
 
     # # since point cloud in 3DSGG has been processed, there is no need to sample any more => actually need
     # point_cloud, choices = random_sampling(point_cloud, self.num_points, return_choices=True)
@@ -242,8 +266,13 @@ def process_one_scan(relationships_scan):
 
     return data_dict
 
+
 def write_into_json(relationship):
     data_dict = process_one_scan(relationship)
+    if data_dict is None:
+        return
+
+    # process needs lock to write into disk
     lock.acquire()
     scan_id = data_dict["scan_id"]
     path = os.path.join(CONF.PATH.R3Scan, "{}/data_dict_{}.json".format(scan_id[:-2], scan_id[-1]))
@@ -252,13 +281,14 @@ def write_into_json(relationship):
         f.write(json.dumps(data_dict, indent=4))
     lock.release()
 
+
 if __name__ == '__main__':
     relationships_train = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationships_train.json")))["scans"]
     relationships_val = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationships_validation.json")))["scans"]
     # merge two dicts
     relationships = relationships_train + relationships_val
 
-    pool = multiprocessing.Pool(12)
+    pool = multiprocessing.Pool(multiprocessing.cpu_count())
     pool.map(write_into_json, relationships)
     pool.close()
     pool.join()
