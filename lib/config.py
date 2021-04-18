@@ -5,7 +5,7 @@ from easydict import EasyDict
 CONF = EasyDict()
 # scalar
 CONF.SCALAR = EasyDict()
-CONF.SCALAR.OBJ_PC_SAMPLE = 1000
+CONF.SCALAR.OBJ_PC_SAMPLE = 1000    # or 1024 in pointnet config
 CONF.SCALAR.REL_PC_SAMPLE = 3000
 
 # path

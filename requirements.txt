@@ -1,0 +1,11 @@
+opencv-python
+trimesh==2.35.39
+tensorboardX
+easydict
+tqdm
+h5py
+matplotlib
+numpy
+plyfile
+torch==1.6.0
+tensorboard

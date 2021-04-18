@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import numpy as np
 import sys
 import os
@@ -10,7 +9,7 @@ def get_eval(data_dict):
     ----------
     data_dict: dict includes objects/relationship predict and triplets
 
-    Returns: dict includes eval metrics
+    Returns data_dict: dict includes eval metrics
     -------
     """
     batch_size = data_dict["objects_id"].size(0)
@@ -20,28 +19,30 @@ def get_eval(data_dict):
     top5_ratio_r = []
     top50_predicate = []
     top100_predicate = []
+    pred_relations_ret = []
     for i in range(batch_size):
-        object_pred = data_dict["objects_predict"][i]
-        object_cat = data_dict["objects_cat"][i]
+        object_count = data_dict["objects_count"][i].item()
+        object_pred = data_dict["objects_predict"][i][:object_count].cpu().numpy()
+        object_cat = data_dict["objects_cat"][i][:object_count].cpu().numpy()
 
         # here, need to notice the relationships between keys 'edges', 'pairs' and 'triples'
         # 'pairs' is the none duplicate list of the first two column of 'triples', while 'edges' corresponds to the index
         # the 'predicate_predicate' takes the mapping relation with 'pairs'
-        predicate_count = data_dict["predicate_count"][i]
-        predicate_pred = data_dict["predicate_predict"][i][:predicate_count]
-        pairs = data_dict["pairs"][i]
-        triples = data_dict["triples"][i]
+        predicate_count = data_dict["predicate_count"][i].item()
+        predicate_pred = data_dict["predicate_predict"][i][:predicate_count].cpu().numpy()
+        pairs = data_dict["pairs"][i][:predicate_count].cpu().numpy()
+        edges = data_dict["edges"][i][:predicate_count].cpu().numpy()
+        triples = data_dict["triples"][i].cpu().numpy()
         # filter out all 0 rows
-        zero_rows = torch.tensor([0, 0, 0]).expand_as(triples).cuda()
+        zero_rows = np.zeros(triples.shape).astype(np.uint8)
         mask = (triples == zero_rows)[:, :2]
-        mask = mask[:, 0] & mask[:, 1]
-        mask = mask ^ torch.tensor([True]).expand_as(mask).cuda()
+        mask = ~ (mask[:, 0] & mask[:, 1])
         triples = triples[mask]
 
         predicate_cat = triples[:, 2]
-        predicate_pred_expand = torch.empty([triples.size(0), predicate_pred.size(1)]).cuda()
+        predicate_pred_expand = np.zeros([triples.shape[0], predicate_pred.shape[1]])
         for index, triple in enumerate(triples):
-            tmp = triple[:2].expand_as(pairs)
+            tmp = np.repeat(triple[:2].reshape(1, -1), len(pairs), axis=0)
             mask = pairs == tmp
             mask = mask[:, 0] & mask[:, 1]
             predicate_pred_expand[index] = predicate_pred[mask]
@@ -51,20 +52,18 @@ def get_eval(data_dict):
         top3_ratio_r.append(topk_ratio(predicate_pred_expand, predicate_cat, 3))
         top5_ratio_r.append(topk_ratio(predicate_pred_expand, predicate_cat, 5))
 
-        edges = data_dict["edges"][i]  # store the index
-        object_conf, _ = torch.topk(object_pred, 1, 1)
-        object_conf = object_conf.squeeze(-1)
-        for x in range(predicate_pred.size(0)):
-            for y in range(predicate_pred.size(1)):
-                if x == 0 and y == 0:
-                    triple_scores = np.array([[object_conf[edges[x,0]] * object_conf[edges[x,1]] * predicate_pred[x,y], triples[x,0], triples[x,1], y]])
-                else:
-                    t = np.array([[object_conf[edges[x,0]] * object_conf[edges[x,1]] * predicate_pred[x,y], triples[x,0], triples[x,1], y]])
-                    triple_scores = np.concatenate((triple_scores,t), axis=0)
-        triple_scores = triple_scores[(-triple_scores[:,0]).argsort()]  # descending order
+         # store the index
+        object_logits = np.max(object_pred, axis=1)
+        object_idx = np.argmax(object_pred, axis=1)
+        obj_scores_per_rel = object_logits[edges].prod(1)
+        overall_scores = obj_scores_per_rel[:, None] * predicate_pred
+        score_inds = argsort_desc(overall_scores)[:100]
+        pred_rels = np.column_stack((pairs[score_inds[:, 0]], score_inds[:, 1]))
+        # predicate_scores = predicate_pred[score_inds[:, 0], score_inds[:, 1]]
 
-        top50_predicate.append(topk_triplet(triple_scores, triples, 50))
-        top100_predicate.append(topk_triplet(triple_scores, triples, 100))
+        top50_predicate.append(topk_triplet(pred_rels, triples, 50))
+        top100_predicate.append(topk_triplet(pred_rels, triples, 100))
+        pred_relations_ret.append(pred_rels)
 
     data_dict["top5_ratio_o"] = np.mean(np.array(top5_ratio_o))
     data_dict["top10_ratio_o"] = np.mean(np.array(top10_ratio_o))
@@ -73,8 +72,7 @@ def get_eval(data_dict):
     data_dict["top50_predicate"] = np.mean(np.array(top50_predicate))
     data_dict["top100_predicate"] = np.mean(np.array(top100_predicate))
 
-    return data_dict
-
+    return data_dict, pred_relations_ret
 
 def topk_ratio(logits, category, k):
     """
@@ -84,38 +82,44 @@ def topk_ratio(logits, category, k):
     category: [N 1] N objects/relationships
     k:  top k
 
-    Returns: recall of top k (R@k)
+    Returns topk_ratio: recall of top k (R@k)
     -------
     """
-    _, topk_pred = torch.topk(logits, k, dim=1)
+    topk_pred = np.argsort(-logits, axis=1)[:, :k]  # descending order
     topk_ratio = 0
     for index, x in enumerate(topk_pred):
         if category[index] in x:
             topk_ratio += 1
-    topk_ratio /= category.size(0)
+    topk_ratio /= category.shape[0]
     return topk_ratio
 
-def topk_triplet(score, triples, k):
+def topk_triplet(pred_tri, gt_tri, k):
     """
     Parameters
     ----------
-    score: multiplying results of each probability of triplets
-    triples: triplets exist in the scene
+    pred_tri: multiplying predict scores results
+    gt_tri: triplets exist in the scene
     k:  top k
 
-    Returns: recall of top k (R@k)
+    Returns ratio: recall of top k (R@k)
     -------
     """
-    tri = score[:,1:]
-    triplets = triples.cpu().tolist()
-    assert len(tri)>=k
+    # assert len(tri)>=k
     ratio = 0
-    for i in range(k):
-        s = tri[i,0].cpu().item()   # make every item on the same device
-        o = tri[i,1].cpu().item()
-        p = tri[i,2]
-        t = [s, o, p]
-        if t in triplets:
+    gt = gt_tri.tolist()
+    pred = pred_tri[:k]
+    for item in pred:
+        line = item.tolist()
+        if line in gt:
             ratio += 1
-    ratio /= len(triples)
+    ratio /= len(gt_tri)
     return ratio
+
+def argsort_desc(scores):
+    """
+    Returns the indices that sort scores descending in a smart way
+    :param scores: Numpy array of arbitrary size
+    :return: an array of size [numel(scores), dim(scores)] where each row is the index you'd
+             need to get the score.
+    """
+    return np.column_stack(np.unravel_index(np.argsort(-scores.ravel()), scores.shape))

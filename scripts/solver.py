@@ -20,47 +20,35 @@ ITER_REPORT_TEMPLATE = """
 [loss] train_loss: {train_loss}
 [loss] train_obj_loss: {train_obj_loss}
 [loss] train_pred_loss: {train_pred_loss}
-[sco.] train_Recall@5_ratio_o: {top5_ratio_o}, train_Recall@10_ratio_o: {top10_ratio_o}
-[sco.] train_Recall@3_ratio_r: {top3_ratio_r}, train_Recall@5_ratio_r: {top5_ratio_r}
-[sco.] train_Recall@50_predicate: {top50_predicate}, train_Recall@100_predicate: {top100_predicate}
-[info] mean_fetch_time: {mean_fetch_time}s
-[info] mean_forward_time: {mean_forward_time}s
-[info] mean_backward_time: {mean_backward_time}s
-[info] mean_eval_time: {mean_eval_time}s
-[info] mean_iter_time: {mean_iter_time}s
+[info] mean_fetch_time: {mean_fetch_time}s       mean_forward_time: {mean_forward_time}s
+[info] mean_backward_time: {mean_backward_time}s    mean_iter_time: {mean_iter_time}s
 [info] ETA: {eta_h}h {eta_m}m {eta_s}s
 """
-
 EPOCH_REPORT_TEMPLATE = """
 ---------------------------------summary---------------------------------
 [train] train_loss: {train_loss}
 [train] train_obj_loss: {train_obj_loss}
 [train] train_pred_loss: {train_pred_loss}
-[train] train_Recall@5_ratio_o: {train_top5_ratio_o}, train_Recall@10_ratio_o: {train_top10_ratio_o}
-[train] train_Recall@3_ratio_r: {train_top3_ratio_r}, train_Recall@5_ratio_r: {train_top5_ratio_r}
-[train] train_Recall@50_predicate: {train_top50_predicate}, train_Recall@100_predicate: {train_top100_predicate}
-[valid] val_loss: {val_loss}
-[valid] val_obj_loss: {val_obj_loss}
-[valid] val_pred_loss: {val_pred_loss}
-[valid] val_Recall@5_ratio_o: {val_top5_ratio_o}, val_Recall@10_ratio_o: {val_top10_ratio_o}
-[valid] val_Recall@3_ratio_r: {val_top3_ratio_r}, val_Recall@5_ratio_r: {val_top5_ratio_r}
-[valid] val_Recall@50_predicate: {val_top50_predicate}, val_Recall@100_predicate: {val_top100_predicate}
+ [val]  val_loss: {val_loss}
+ [val]  val_obj_loss: {val_obj_loss}
+ [val]  val_pred_loss: {val_pred_loss}
+ [val]  val_Recall@5_ratio_o: {val_top5_ratio_o}, val_Recall@10_ratio_o: {val_top10_ratio_o}
+ [val]  val_Recall@3_ratio_r: {val_top3_ratio_r}, val_Recall@5_ratio_r: {val_top5_ratio_r}
+ [val]  val_Recall@50_predicate: {val_top50_predicate}, val_Recall@100_predicate: {val_top100_predicate}
 """
-
 BEST_REPORT_TEMPLATE = """
 ---------------------------------best---------------------------------
 [best] epoch: {epoch}
 [loss] loss: {loss}
 [loss] obj_loss: {obj_loss}
 [loss] pred_loss: {pred_loss}
-[sco.] train_Recall@5_ratio_o: {top5_ratio_o}
-[sco.] train_Recall@10_ratio_o: {top10_ratio_o}
-[sco.] train_Recall@3_ratio_r: {top3_ratio_r}
-[sco.] train_Recall@5_ratio_r: {top5_ratio_r}
-[sco.] train_Recall@50_predicate: {top50_predicate}
-[sco.] train_Recall@100_predicate: {top100_predicate}
+[sco.] Recall@5_object: {top5_ratio_o}
+[sco.] Recall@10_object: {top10_ratio_o}
+[sco.] Recall@3_predicate: {top3_ratio_r}
+[sco.] Recall@5_predicate: {top5_ratio_r}
+[sco.] Recall@50_relationship: {top50_predicate}
+[sco.] Recall@100_relationship: {top100_predicate}
 """
-
 
 class Solver():
     def __init__(self, model, dataloader, optimizer, stamp, val_step=10,
@@ -80,7 +68,7 @@ class Solver():
         self.bn_decay_rate = bn_decay_rate
 
         self.obj_criterion = CrossEntropyFocalLoss()
-        self.rel_criterion = PerClassBCEFocalLosswithLogits(alpha=0.25)
+        self.rel_criterion = PerClassBCEFocalLosswithLogits(alpha=0.1)
 
         self.best = {
             "epoch": 0,
@@ -155,7 +143,7 @@ class Solver():
                 self._log("epoch {} starting...".format(epoch_id + 1))
 
                 # feed
-                self._feed(self.dataloader["val"], "val", epoch_id)
+                self._feed(self.dataloader["train"], "train", epoch_id)
 
                 # save model
                 self._log("saving last models...\n")
@@ -188,7 +176,7 @@ class Solver():
         self._reset_log(phase)
         # change dataloader
         # tqdm(dataloader[val]) to indicating the process of loading data
-        dataloader = dataloader if phase == "train" else tqdm(dataloader)
+        # dataloader = dataloader if phase == "train" else tqdm(dataloader)
 
         for data_dict in dataloader:
             # move to cuda
@@ -225,6 +213,9 @@ class Solver():
                         data_dict = self._forward(data_dict)
                         data_dict = self._compute_loss(data_dict)
                 self.log[phase]["forward"].append(time.time() - start)
+                self.log[phase]["loss"].append(self._running_log["loss"].item())
+                self.log[phase]["L_obj"].append(self._running_log["L_obj"].item())
+                self.log[phase]["L_pred"].append(self._running_log["L_pred"].item())
 
                 # backward
                 if phase == "train":
@@ -232,33 +223,8 @@ class Solver():
                     self._backward(data_dict)
                     self.log[phase]["backward"].append(time.time() - start)
 
-            # eval
-            start = time.time()
-            self._eval(data_dict)
-            self.log[phase]["eval"].append(time.time() - start)
-
-            # delete reference to the input/output
-            del data_dict
-
-            # record log
-            self.log[phase]["loss"].append(self._running_log["loss"].item())
-            self.log[phase]["L_obj"].append(self._running_log["L_obj"].item())
-            self.log[phase]["L_pred"].append(self._running_log["L_pred"].item())
-
-            self.log[phase]["top5_ratio_o"].append(self._running_log["top5_ratio_o"])
-            self.log[phase]["top10_ratio_o"].append(self._running_log["top10_ratio_o"])
-            self.log[phase]["top3_ratio_r"].append(self._running_log["top3_ratio_r"])
-            self.log[phase]["top5_ratio_r"].append(self._running_log["top5_ratio_r"])
-            self.log[phase]["top50_predicate"].append(self._running_log["top50_predicate"])
-            self.log[phase]["top100_predicate"].append(self._running_log["top100_predicate"])
-
             # report
             if phase == "train":
-                iter_time = self.log[phase]["fetch"][-1]
-                iter_time += self.log[phase]["forward"][-1]
-                iter_time += self.log[phase]["backward"][-1]
-                iter_time += self.log[phase]["eval"][-1]
-                self.log[phase]["iter_time"].append(iter_time)
                 if (self._global_iter_id + 1) % self.verbose == 0:
                     self._train_report(epoch_id)
 
@@ -275,9 +241,23 @@ class Solver():
                 self._dump_log("train")
                 self._global_iter_id += 1
 
+            # eval
+            if phase == "val":
+                start = time.time()
+                self._eval(data_dict)
+                self.log[phase]["eval"].append(time.time() - start)
+
+                # record log
+                self.log[phase]["top5_ratio_o"].append(self._running_log["top5_ratio_o"])
+                self.log[phase]["top10_ratio_o"].append(self._running_log["top10_ratio_o"])
+                self.log[phase]["top3_ratio_r"].append(self._running_log["top3_ratio_r"])
+                self.log[phase]["top5_ratio_r"].append(self._running_log["top5_ratio_r"])
+                self.log[phase]["top50_predicate"].append(self._running_log["top50_predicate"])
+                self.log[phase]["top100_predicate"].append(self._running_log["top100_predicate"])
+
         # check best
         if phase == "val":
-            cur_criterion = "top5_ratio_o"
+            cur_criterion = "top50_predicate"
             cur_best = np.mean(self.log[phase][cur_criterion])
             if cur_best > self.best[cur_criterion]:
                 self._log("best {} achieved: {}".format(cur_criterion, cur_best))
@@ -376,7 +356,7 @@ class Solver():
         return data_dict
 
     def _eval(self, data_dict):
-        data_dict = get_eval(data_dict)
+        data_dict, _ = get_eval(data_dict)
         # dump
         self._running_log["top5_ratio_o"] = data_dict["top5_ratio_o"]
         self._running_log["top10_ratio_o"] = data_dict["top10_ratio_o"]
@@ -386,15 +366,20 @@ class Solver():
         self._running_log["top100_predicate"] = data_dict["top100_predicate"]
 
     def _dump_log(self, phase):
-        log = {
-            "loss": ["loss", "L_obj", "L_pred"],
-            "score": ["top5_ratio_o", "top10_ratio_o", "top3_ratio_r", "top5_ratio_r", "top50_predicate", "top100_predicate"]
-        }
+        import math
+        if phase == "train":
+            log = {"loss": ["loss", "L_obj", "L_pred"]}
+        else:
+            log = {
+                "loss": ["loss", "L_obj", "L_pred"],
+                "score": ["top5_ratio_o", "top10_ratio_o", "top3_ratio_r", "top5_ratio_r", "top50_predicate", "top100_predicate"]
+            }
         for key in log:
             for item in log[key]:
+                a = np.mean([v for v in self.log[phase][item]])
                 self._log_writer[phase].add_scalar(
                     "{}/{}".format(key, item),
-                    np.mean([v for v in self.log[phase][item]]),
+                    a,
                     self._global_iter_id
                 )
 
@@ -424,11 +409,10 @@ class Solver():
 
     def _train_report(self, epoch_id):
         # compute ETA
-        fetch_time = self.log["train"]["fetch"]
-        forward_time = self.log["train"]["forward"]
-        backward_time = self.log["train"]["backward"]
-        eval_time = self.log["train"]["eval"]
-        iter_time = self.log["train"]["iter_time"]
+        fetch_time = np.array(self.log["train"]["fetch"])
+        forward_time = np.array(self.log["train"]["forward"])
+        backward_time = np.array(self.log["train"]["backward"])
+        iter_time = fetch_time + forward_time + backward_time
 
         mean_train_time = np.mean(iter_time)
         mean_est_val_time = np.mean([fetch + forward for fetch, forward in zip(fetch_time, forward_time)])
@@ -444,16 +428,9 @@ class Solver():
             train_loss=round(np.mean([v for v in self.log["train"]["loss"]]), 5),
             train_obj_loss=round(np.mean([v for v in self.log["train"]["L_obj"]]), 5),
             train_pred_loss=round(np.mean([v for v in self.log["train"]["L_pred"]]), 5),
-            top5_ratio_o=round(np.mean([v for v in self.log["train"]["top5_ratio_o"]]), 5),
-            top10_ratio_o=round(np.mean([v for v in self.log["train"]["top10_ratio_o"]]), 5),
-            top3_ratio_r=round(np.mean([v for v in self.log["train"]["top3_ratio_r"]]), 5),
-            top5_ratio_r=round(np.mean([v for v in self.log["train"]["top5_ratio_r"]]), 5),
-            top50_predicate=round(np.mean([v for v in self.log["train"]["top50_predicate"]]), 5),
-            top100_predicate=round(np.mean([v for v in self.log["train"]["top100_predicate"]]), 5),
             mean_fetch_time=round(np.mean(fetch_time), 5),
             mean_forward_time=round(np.mean(forward_time), 5),
             mean_backward_time=round(np.mean(backward_time), 5),
-            mean_eval_time=round(np.mean(eval_time), 5),
             mean_iter_time=round(np.mean(iter_time), 5),
             eta_h=eta["h"],
             eta_m=eta["m"],
@@ -462,17 +439,11 @@ class Solver():
         self._log(iter_report)
 
     def _epoch_report(self, epoch_id):
-        self._log("epoch [{}/{}] done...".format(epoch_id + 1, self.epoch))
+        self._log("epoch [{}/{}] ...".format(epoch_id + 1, self.epoch))
         epoch_report = self.__epoch_report_template.format(
             train_loss=round(np.mean([v for v in self.log["train"]["loss"]]), 5),
             train_obj_loss=round(np.mean([v for v in self.log["train"]["L_obj"]]), 5),
             train_pred_loss=round(np.mean([v for v in self.log["train"]["L_pred"]]), 5),
-            train_top5_ratio_o=round(np.mean([v for v in self.log["train"]["top5_ratio_o"]]), 5),
-            train_top10_ratio_o=round(np.mean([v for v in self.log["train"]["top10_ratio_o"]]), 5),
-            train_top3_ratio_r=round(np.mean([v for v in self.log["train"]["top3_ratio_r"]]), 5),
-            train_top5_ratio_r=round(np.mean([v for v in self.log["train"]["top5_ratio_r"]]), 5),
-            train_top50_predicate=round(np.mean([v for v in self.log["train"]["top50_predicate"]]), 5),
-            train_top100_predicate=round(np.mean([v for v in self.log["train"]["top100_predicate"]]), 5),
             val_loss=round(np.mean([v for v in self.log["val"]["loss"]]), 5),
             val_obj_loss=round(np.mean([v for v in self.log["val"]["L_obj"]]), 5),
             val_pred_loss=round(np.mean([v for v in self.log["val"]["L_pred"]]), 5),
