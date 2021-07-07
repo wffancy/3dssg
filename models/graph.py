@@ -11,7 +11,6 @@ def _init_weights(module):
     if isinstance(module, nn.Linear):
       nn.init.kaiming_normal_(module.weight)
 
-
 class GraphTripleConv(nn.Module):
     """
     A single layer of scene graph convolution.

@@ -45,13 +45,15 @@ class PerClassBCEFocalLosswithLogits(nn.Module):    # namely multi-label classif
 
     def forward(self, logits, target):
         # logits: [N, F], target: [1, N]
+        # logits = torch.clamp(logits, -5, 5)  # avoid overflow after sigmoid computation in the val phase, remains for observation
+        if not self.training:
+            logits = torch.clamp(logits, -5, 5)  # avoid overflow after sigmoid computation in the val phase, remains for observation
         logits = torch.sigmoid(logits)
-        loss = torch.zeros(logits.size())
+        alpha = self.alpha
+        gamma = self.gamma
 
-        for i, logit in enumerate(logits):
-            for j, l in enumerate(logit):
-                loss[i, j] = -1 * self.alpha * (1 - l) ** self.gamma * torch.log(l) if target[i, j] == 1 \
-                    else -1 * (1 - self.alpha) * l ** self.gamma * torch.log(1 - l)
+        loss = -alpha * (1 - logits) ** gamma * target * torch.log(logits) - \
+               (1 - alpha) * logits ** gamma * (1 - target) * torch.log(1 - logits)
 
         if self.reduction == 'mean':
             loss = loss.mean()

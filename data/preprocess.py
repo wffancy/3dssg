@@ -12,14 +12,12 @@ import multiprocessing
 
 lock = multiprocessing.Lock()
 
-
 def read_ply(filename):
     """ read point cloud from filename PLY file """
     plydata = PlyData.read(filename)
     pc = plydata['vertex'].data
     pc_array = np.array([[x, y, z, r, g, b, oid, cid, nyu, mpr] for x, y, z, r, g, b, oid, cid, nyu, mpr in pc])
     return pc_array
-
 
 def read_obj(filename):
     """ read point cloud from OBJ file"""
@@ -35,7 +33,6 @@ def read_obj(filename):
         point_cloud = np.array(point_cloud)
     return point_cloud
 
-
 def pc_normalize(pc):
     pc_ = pc[:,:3]
     centroid = np.mean(pc_, axis=0)
@@ -47,7 +44,6 @@ def pc_normalize(pc):
     else:
         pc = pc_
     return pc
-
 
 def farthest_point_sample(point, npoint):
     """
@@ -74,7 +70,6 @@ def farthest_point_sample(point, npoint):
     point = point[centroids.astype(np.int32)]
     return point
 
-
 def judge_obb_intersect(p, obb):
     # judge one point is or not in the obb
     center = np.array(obb["centroid"])
@@ -88,7 +83,6 @@ def judge_obb_intersect(p, obb):
     return -axis_len[0]/2 <= project_x <= axis_len[0]/2 and\
            -axis_len[1]/2 <= project_y <= axis_len[1]/2 and\
            -axis_len[2]/2 <= project_z <= axis_len[2]/2
-
 
 def process_one_scan(relationships_scan):
     scan_id = relationships_scan["scan"] + "-" + str(hex(relationships_scan["split"]))[-1]
@@ -172,7 +166,7 @@ def process_one_scan(relationships_scan):
         objects_pc = v if not len(objects_pc) else np.concatenate((objects_pc, v), axis=0)
 
     # predicate input of PointNet, including points in the union bounding box of subject and object
-    # here consider every possible combine between objects, if there doesn't exist relation in the training file,
+    # here consider every possible combination between objects, if there doesn't exist relation in the training file,
     # add the relation with the predicate id replaced by 0
     triples = []
     pairs = []
@@ -266,7 +260,6 @@ def process_one_scan(relationships_scan):
 
     return data_dict
 
-
 def write_into_json(relationship):
     data_dict = process_one_scan(relationship)
     if data_dict is None:
@@ -281,6 +274,15 @@ def write_into_json(relationship):
         f.write(json.dumps(data_dict, indent=4))
     lock.release()
 
+# def strip_file(old_file, new_file):
+#     """remove the space or Tab or enter in a file, and output to a new file in the same folder"""
+#     fp = open(old_file, 'r+')
+#     newfp = open(new_file, 'w')
+#     for line in fp.readlines():
+#         str = line.replace(" ", "").replace("\t", "").strip()
+#         newfp.write(str)
+#     fp.close()
+#     newfp.close()
 
 if __name__ == '__main__':
     relationships_train = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationships_train.json")))["scans"]
@@ -292,3 +294,8 @@ if __name__ == '__main__':
     pool.map(write_into_json, relationships)
     pool.close()
     pool.join()
+
+    # for relationship in relationships:
+    #     path = os.path.join(CONF.PATH.R3Scan, "{}/mini_data_dict_{}.json".format(relationship["scan"], str(hex(relationship["split"]))[-1]))
+    #     if os.path.exists(path):
+    #         os.remove(path)

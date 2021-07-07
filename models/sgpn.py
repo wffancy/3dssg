@@ -11,13 +11,11 @@ from models.graph import GraphTripleConv, GraphTripleConvNet
 from models.layers import build_mlp
 from lib.config import CONF
 
-
 def get_num_params(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     num_params = int(sum([np.prod(p.size()) for p in model_parameters]))
 
     return num_params
-
 
 def load_pretained_cls_model(model):
     # load pretrained pointnet_cls model [ relPointNet ver. ]
@@ -27,36 +25,27 @@ def load_pretained_cls_model(model):
     net_state_dict.update(pretrained_dict_)
     model.load_state_dict(net_state_dict)
 
-
 class SGPN(nn.Module):
-    def __init__(self, gconv_dim=128, gconv_hidden_dim=512,
+    def __init__(self, use_pretrained_cls, gconv_dim=128, gconv_hidden_dim=512,
                  gconv_pooling='avg', gconv_num_layers=5, mlp_normalization='none',
                  obj_cat_num=160, pred_cat_num=27):
         super().__init__()
 
         # ObjPointNet and RelPointNet
         self.objPointNet = PointNetEncoder(global_feat=True, feature_transform=True, channel=3) # (x,y,z)
-        # load_pretained_cls_model(self.objPointNet)
+        if use_pretrained_cls:
+            load_pretained_cls_model(self.objPointNet)
 
         self.relPointNet = PointNetEncoder(global_feat=True, feature_transform=True, channel=4) # (x,y,z,M) M-> class-agnostic instance segmentation
-        # load_pretained_cls_model(self.relPointNet)
-
-        self.conv1 = nn.Conv1d(1024, 256, 1)
-        self.bn1 = nn.BatchNorm1d(256)
-        self.relu1 = nn.ReLU()
-
-        self.maxpool1 = nn.MaxPool1d(256)
-        self.conv2 = nn.Conv1d(1024, 256, 1)
-        self.bn2 = nn.BatchNorm1d(256)
-        self.relu2 = nn.ReLU()
-        self.maxpool2 = nn.MaxPool1d(256)
+        if use_pretrained_cls:
+            load_pretained_cls_model(self.relPointNet)
 
         # GCN module
         if gconv_num_layers == 0:
-            self.gconv = nn.Linear(256, gconv_dim) # final feature of the pointNet2
+            self.gconv = nn.Linear(1024, gconv_dim) # final feature of the pointNet2
         elif gconv_num_layers > 0:
             gconv_kwargs = {
-                'input_dim': 256,
+                'input_dim': 1024,
                 'output_dim': gconv_dim,
                 'hidden_dim': gconv_hidden_dim,
                 'pooling': gconv_pooling,
@@ -94,15 +83,11 @@ class SGPN(nn.Module):
 
         # point cloud pass objPointNet
         objects_pc = objects_pc.permute(0, 2, 1)
-        feature, _, tf1 = self.objPointNet(objects_pc)
-        feature = feature.unsqueeze(-1)
-        obj_vecs = self.relu1(self.bn1(self.conv1(feature))).squeeze(-1)
+        obj_vecs, _, tf1 = self.objPointNet(objects_pc)
 
         # point cloud pass relPointNet
         predicate_pc_flag = predicate_pc_flag.permute(0, 2, 1)
-        feature, _, tf2 = self.relPointNet(predicate_pc_flag)
-        feature = feature.unsqueeze(-1)
-        pred_vecs = self.relu2(self.bn2(self.conv2(feature))).squeeze(-1)
+        pred_vecs, _, tf2 = self.relPointNet(predicate_pc_flag)
 
         trans_feat.append(tf1)
         trans_feat.append(tf2)
@@ -120,6 +105,7 @@ class SGPN(nn.Module):
                 o_vecs, p_vecs = self.gconv(obj_vecs[object_num*i: object_num*(i+1)], pred_vecs[predicate_num*i: predicate_num*(i+1)], edges[i])
             if self.gconv_net is not None:
                 o_vecs, p_vecs = self.gconv_net(o_vecs, p_vecs, edges[i])
+
             obj_vecs_list.append(o_vecs)
             pred_vecs_list.append(p_vecs)
 
