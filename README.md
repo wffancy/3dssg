@@ -17,7 +17,7 @@ Install the necessary packages listed out in requirements.txt:
 pip install -r requirements.txt
 ```
 
-After all packages are properly installed, please run the following commands to compile the CUDA modules for the PointNet++ backbone:  
+After all packages are properly installed, please run the following commands to compile the CUDA modules for the PointNet++ backbone (optional, the default code doesn't use this):  
 
 ```shell
 cd lib/pointnet2
