@@ -1,10 +1,12 @@
 import os
 import sys
 import json
+import time
 import argparse
 import torch
 import torch.optim as optim
 import numpy as np
+# from torchstat import stat
 
 from torch.utils.data import DataLoader
 from datetime import datetime
@@ -25,6 +27,7 @@ D3SSG_VAL = json.load(open(os.path.join(CONF.PATH.DATA, "3DSSG_subset/relationsh
 node_color_list = ['aliceblue', 'antiquewhite', 'cornsilk3', 'lightpink', 'salmon', 'palegreen', 'khaki',
                    'darkkhaki', 'orange']
 WORKERS = 12
+VIS_WITH_GT = 1
 
 def inplace_relu(m):
     classname = m.__class__.__name__
@@ -44,8 +47,8 @@ def read_class(path):
 def get_model(args):
     # initiate model
     use_pretrained_cls = not args.use_pretrained
-    model = SGPN(use_pretrained_cls, gconv_dim=128, gconv_hidden_dim=512,
-               gconv_pooling='avg', gconv_num_layers=5, mlp_normalization='batch')
+    model = SGPN(use_pretrained_cls, feature_extractor=CONF.EXTRACTOR, graph_gen=CONF.GNN,
+                 gnn_dim=128, gnn_hidden_dim=512, gnn_pooling='avg', gnn_num_layers=5, mlp_normalization='batch')
 
     # trainable model
     if args.use_pretrained:
@@ -87,24 +90,20 @@ def get_solver(args, dataloader):
         root = os.path.join(CONF.PATH.OUTPUT, stamp)
         os.makedirs(root, exist_ok=True)
 
-    LR_DECAY_STEP = [30, 40, 50]
-    LR_DECAY_RATE = 0.1
-    BN_DECAY_STEP = 20
-    BN_DECAY_RATE = 0.5
-
     solver = Solver(
         model=model,
         dataloader=dataloader,
         optimizer=optimizer,
         stamp=stamp,
         val_step=args.val_step,
-        lr_decay_step=LR_DECAY_STEP,
-        lr_decay_rate=LR_DECAY_RATE,
-        bn_decay_step=BN_DECAY_STEP,
-        bn_decay_rate=BN_DECAY_RATE
+        lr_decay_step=CONF.SCALAR.LR_DECAY_STEP,
+        lr_decay_rate=CONF.SCALAR.LR_DECAY_RATE,
+        bn_decay_step=CONF.SCALAR.BN_DECAY_STEP,
+        bn_decay_rate=CONF.SCALAR.BN_DECAY_RATE
     )
     num_params = get_num_params(model)
     print('sgpn params:', num_params)
+    # stat(model, (9,3,1000))
 
     return solver, num_params, root
 
@@ -154,7 +153,7 @@ def get_3dssg(d3ssg_train, d3ssg_val, num_scans):
 
     return new_3dssg_train, new_3dssg_val, train_scan_list, val_scan_list
 
-def visualize(data_dict, model, obj_dict, pred_dict):
+def visualize(data_dict, model, obj_dict, pred_dict, with_GT):
     dot = Digraph(comment='The Scene Graph')
     dot.attr(rankdir='TB')
 
@@ -162,34 +161,58 @@ def visualize(data_dict, model, obj_dict, pred_dict):
         data_dict = model(data_dict)
 
     data, pred_relations = get_eval(data_dict)
-    triples = data["triples"][0].cpu().numpy()
+    triples = data["triples"][0].cpu().numpy().copy()
     object_id = data["objects_id"][0].cpu().numpy()
     object_cat = data["objects_cat"][0].cpu().numpy()
     object_pred = data["objects_predict"][0].cpu().numpy()
 
-    dot.attr(label='predicted')
     # nodes
     obj_pred_cls = np.argmax(object_pred, axis=1)
-    dot.attr('node', shape='oval', fontname='Sans')
+    dot.attr('node', shape='oval', fontname='Sans', fontsize='16.0')
     for index in range(len(object_cat)):
         id = str(object_id[index])
         dot.attr('node', fillcolor=node_color_list[index], style='filled')
         pred = obj_pred_cls[index]
         gt = object_cat[index]
-        note = obj_dict[pred] + '\n(GT:' + obj_dict[gt] + ')'
+        if with_GT:
+            note = obj_dict[pred] + '\n(GT:' + obj_dict[gt] + ')'
+        else:
+            note = obj_dict[pred]
         dot.node(id, note)
     # edges
-    dot.attr('edge', fontname='Sans', color='black', style='filled')
-    for relation in pred_relations[0][:50]:
+    dot.attr('edge', fontname='Sans', fontsize='12.0', color='black', style='filled')
+    for relation in pred_relations[0]:
         s, o, p = relation
-        if p == 0:
+        line = np.repeat(np.array([s, o]).reshape(1, -1), min(len(triples), len(pred_relations[0])), axis=0)
+        mask = (line[:, 0] == triples[:, 0]) & (line[:, 1] == triples[:, 1])
+        if type(mask) is np.ndarray and sum(mask) > 0:
+            gt_p = triples[mask][0, 2]
+            triples = np.delete(triples, mask, 0)
+        else:
+            if type(mask) is bool:
+                gt_p = triples[0, 2]
+                triples = np.delete(triples, 0, 0)
+            else:
+                continue
+        if p == gt_p:
+            dot.attr('edge', color='green')
+        else:
+            dot.attr('edge', color='black')
+        if gt_p == 0:   # ignore ground truth predicate is 'None'
             continue
-        dot.edge(str(s), str(o), pred_dict[p])
+        if with_GT:
+            dot.edge(str(s), str(o), pred_dict[p] + '\n(GT:' + pred_dict[gt_p] + ')')
+        else:
+            dot.edge(str(s), str(o), pred_dict[p])
     for item in triples:
         s, o, p = item
         if p == 0:
             continue
-        dot.edge(str(s), str(o), pred_dict[p])
+        dot.attr('edge', color='black')
+        if with_GT:
+            dot.edge(str(s), str(o), 'None\n(GT:' + pred_dict[p] + ')')
+        else:
+            dot.edge(str(s), str(o), 'None')
 
     # print(dot.source)
     scan = data_dict["scan_id"][0][:-2]
@@ -205,31 +228,44 @@ def train(args):
         "val": d3ssg_val
     }
 
+    # start_time = time.time()
     val_dataset = D3SemanticSceneGraphDataset(relationships=d3ssg["val"],
                                                 all_scan_id=val_scene_list, split="val")
 
     if args.vis:
+        start_time = time.time()
         dataloader = DataLoader(val_dataset, batch_size=1, shuffle=True,
                                 collate_fn=val_dataset.collate_fn, num_workers=WORKERS)
         use_pretrained_cls = not args.use_pretrained
-        model = SGPN(use_pretrained_cls, gconv_dim=128, gconv_hidden_dim=512,
-                     gconv_pooling='avg', gconv_num_layers=5, mlp_normalization='batch')
+        model = SGPN(use_pretrained_cls, gnn_dim=1024, gnn_hidden_dim=512,
+                     gnn_pooling='avg', gnn_num_layers=5, mlp_normalization='batch')
         assert args.use_pretrained
         pretrained_path = os.path.join(CONF.PATH.OUTPUT, args.use_pretrained, "model_last.pth")
-        model.load_state_dict(torch.load(pretrained_path), strict=False)
+        model.load_state_dict(torch.load(pretrained_path), strict=True)
         model = model.cuda()
         model.eval()
 
         obj_class_dict = read_class("3DSSG_subset/classes.txt")
         pred_class_dict = read_class("3DSSG_subset/relationships.txt")
 
+        images_count = 0
         for data_dict in dataloader:
             # move to cuda
             for key in data_dict:
                 if key != "scan_id":
                     data_dict[key] = data_dict[key].cuda()
 
-            visualize(data_dict, model, obj_class_dict, pred_class_dict)
+            tmp_start_time = time.time()
+            visualize(data_dict, model, obj_class_dict, pred_class_dict, VIS_WITH_GT)
+            tmp_end_time = time.time()
+            # print(data_dict['scan_id'][0] + ":" + str(tmp_end_time - tmp_start_time) + "s")
+            images_count = images_count + 1
+            
+        end_time = time.time()
+        avg_time = (end_time - start_time) / images_count
+        print("total splits num:" + str(images_count))
+        print("total time consumption (including data loading):" + str(end_time - start_time))
+        print("average drawing time consumption: " + str(avg_time))
 
         print("finished rendering.")
         return
@@ -256,22 +292,22 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    # parser.add_argument("--gpu", type=str, help="gpu", default="0")
+    parser.add_argument("--gpu", type=str, help="gpu", default="0")
     parser.add_argument("--scene_num", type=int, help="number of scenes", default=-1)
     parser.add_argument("--batch_size", type=int, help="batch size", default=1)
-    parser.add_argument("--epoch", type=int, help="number of epochs", default=50)
+    parser.add_argument("--epoch", type=int, help="number of epochs", default=25)
     parser.add_argument("--verbose", type=int, help="iterations of showing verbose", default=100)    # train iter
-    parser.add_argument("--val_step", type=int, help="iterations of validating", default=10000)   # val iter
+    parser.add_argument("--val_step", type=int, help="iterations of validating", default=1000)   # val iter
     parser.add_argument("--use_pretrained", type=str, help="Specify the folder name containing the pretrained module.")
     parser.add_argument("--use_checkpoint", type=str, help="Specify the checkpoint root", default="")
-    parser.add_argument("--lr", type=float, help="learning rate", default=1e-4)
+    parser.add_argument("--lr", type=float, help="learning rate", default=1e-3)
     parser.add_argument("--wd", type=float, help="weight decay", default=1e-5)
     parser.add_argument("--seed", type=int, default=42, help="random seed")
     parser.add_argument("--vis", action="store_true", help="render visualization result")
     # parser.add_argument("--local_rank", type=int, default=0)
     args = parser.parse_args()
     # setting
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
     # reproducibility
     torch.manual_seed(args.seed)

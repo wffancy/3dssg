@@ -27,14 +27,14 @@ def get_eval(data_dict):
 
         # here, need to notice the relationships between keys 'edges', 'pairs' and 'triples'
         # 'pairs' is the none duplicate list of the first two column of 'triples', while 'edges' corresponds to the index
-        # the 'predicate_predicate' takes the mapping relation with 'pairs'
+        # the 'predicate_predict' takes the mapping relation with 'pairs'
         predicate_count = data_dict["predicate_count"][i].item()
         predicate_pred = data_dict["predicate_predict"][i][:predicate_count].cpu().numpy()
         pairs = data_dict["pairs"][i][:predicate_count].cpu().numpy()
         edges = data_dict["edges"][i][:predicate_count].cpu().numpy()
         triples = data_dict["triples"][i].cpu().numpy()
         # filter out all 0 rows
-        zero_rows = np.zeros(triples.shape).astype(np.uint8)
+        zero_rows = np.zeros(triples.shape)
         mask = (triples == zero_rows)[:, :2]
         mask = ~ (mask[:, 0] & mask[:, 1])
         triples = triples[mask]

@@ -32,12 +32,15 @@ EPOCH_REPORT_TEMPLATE = """
  [val]  val_loss: {val_loss}
  [val]  val_obj_loss: {val_obj_loss}
  [val]  val_pred_loss: {val_pred_loss}
- [val]  val_Recall@5_ratio_o: {val_top5_ratio_o}, val_Recall@10_ratio_o: {val_top10_ratio_o}
- [val]  val_Recall@3_ratio_r: {val_top3_ratio_r}, val_Recall@5_ratio_r: {val_top5_ratio_r}
- [val]  val_Recall@50_predicate: {val_top50_predicate}, val_Recall@100_predicate: {val_top100_predicate}
+ [val]  val_Recall@5_ratio_o: {val_top5_ratio_o}    val_Recall@10_ratio_o: {val_top10_ratio_o}
+ [val]  val_Recall@3_ratio_r: {val_top3_ratio_r}    val_Recall@5_ratio_r: {val_top5_ratio_r}
+ [val]  val_Recall@50_predicate: {val_top50_predicate} val_Recall@100_predicate: {val_top100_predicate}
+[info]  mean_fetch_time: {mean_fetch_time}s    mean_forward_time: {mean_forward_time}s
+[info]  mean_eval_time: {mean_eval_time}s      mean_iter_time: {mean_iter_time}s
 """
 BEST_REPORT_TEMPLATE = """
----------------------------------best---------------------------------
+---------------------------------best-----------------------------
+8----
 [best] epoch: {epoch}
 [loss] loss: {loss}
 [loss] obj_loss: {obj_loss}
@@ -67,8 +70,26 @@ class Solver():
         self.bn_decay_step = bn_decay_step
         self.bn_decay_rate = bn_decay_rate
 
-        self.obj_criterion = CrossEntropyFocalLoss()
-        self.rel_criterion = PerClassBCEFocalLosswithLogits(alpha=0.1)
+        # load classes.txt into a dict
+        file = open(os.path.join(CONF.PATH.DATA, "3DSSG/classes.txt"), 'r')
+        description = file.readline()[:-1]
+        elements = description.split('\t')
+        word_dict = {}
+        while True:
+            category = elements[1]
+            elements = elements[3:]
+            word_dict[category] = elements
+            description = file.readline()[:-1]
+            elements = description.split('\t')
+            if not description:
+                break
+
+        if CONF.SINGLE_OR_MULTI:
+            self.obj_criterion = CrossEntropyFocalLoss()
+            self.rel_criterion = CrossEntropyFocalLoss()
+        else:
+            self.obj_criterion = CrossEntropyFocalLoss(word_dict=word_dict)
+            self.rel_criterion = PerClassBCEFocalLosswithLogits(alpha=0.9)
 
         self.best = {
             "epoch": 0,
@@ -82,8 +103,7 @@ class Solver():
             "top50_predicate": -float("inf"),
             "top100_predicate": -float("inf")
         }
-        # init log
-        # contains all necessary info for all phases
+        # init log, contains all necessary info for all phases
         self.log = {
             "train": {},
             "val": {}
@@ -331,9 +351,18 @@ class Solver():
         for index in range(batch_size):
             obj_count = int(data_dict["objects_count"][index].item())
             rel_count = int(data_dict["predicate_count"][index].item())
-            Focal_Lobj.append(self.obj_criterion(data_dict["objects_predict"][index][:obj_count], data_dict["objects_cat"][index][:obj_count]))
-            # predicate classification: per-class binary cross entropy.
-            Focal_Lpred.append(self.rel_criterion(data_dict["predicate_predict"][index][:rel_count], data_dict["predicate_cat"][index][:rel_count]))
+            Focal_Lobj.append(self.obj_criterion(data_dict["objects_predict"][index][:obj_count],
+                                                 data_dict["objects_cat"][index][:obj_count]))
+            if CONF.SINGLE_OR_MULTI:
+                # single classification
+                cat_class = np.argwhere(data_dict["predicate_cat"][index][:rel_count].cpu().numpy() == 1)
+                logits = data_dict["predicate_predict"][index][:rel_count][cat_class[:, 0]].cuda()
+                target = torch.from_numpy(cat_class[:, 1]).cuda()
+                Focal_Lpred.append(self.rel_criterion(logits, target))
+            else:
+                # predicate classification: per-class binary cross entropy.
+                Focal_Lpred.append(self.rel_criterion(data_dict["predicate_predict"][index][:rel_count],
+                                                      data_dict["predicate_cat"][index][:rel_count]))
 
         #  PointNet feature transform regularizer
         mat_diff_loss = 0
@@ -439,6 +468,11 @@ class Solver():
         self._log(iter_report)
 
     def _epoch_report(self, epoch_id):
+        fetch_time = np.array(self.log["val"]["fetch"])
+        forward_time = np.array(self.log["val"]["forward"])
+        eval_time = np.array(self.log["val"]["eval"])
+        iter_time = fetch_time + forward_time + eval_time
+
         self._log("epoch [{}/{}] ...".format(epoch_id + 1, self.epoch))
         epoch_report = self.__epoch_report_template.format(
             train_loss=round(np.mean([v for v in self.log["train"]["loss"]]), 5),
@@ -453,6 +487,10 @@ class Solver():
             val_top5_ratio_r=round(np.mean([v for v in self.log["val"]["top5_ratio_r"]]), 5),
             val_top50_predicate=round(np.mean([v for v in self.log["val"]["top50_predicate"]]), 5),
             val_top100_predicate=round(np.mean([v for v in self.log["val"]["top100_predicate"]]), 5),
+            mean_fetch_time=round(np.mean(fetch_time), 5),
+            mean_forward_time=round(np.mean(forward_time), 5),
+            mean_eval_time=round(np.mean(eval_time), 5),
+            mean_iter_time=round(np.mean(iter_time), 5)
         )
         self._log(epoch_report)
 

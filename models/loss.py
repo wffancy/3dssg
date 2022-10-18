@@ -3,11 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class CrossEntropyFocalLoss(nn.Module):
-    def __init__(self, alpha=None, gamma=0.2, reduction='mean'):
+    def __init__(self, word_dict=None, beta=0.5, gamma=2, alpha=None, reduction='mean'):
         super(CrossEntropyFocalLoss, self).__init__()
         self.reduction = reduction
         self.alpha = alpha
         self.gamma = gamma
+        self.word_dict = word_dict
 
     def forward(self, logits, target):
         # logits: [N, C, H, W], target: [N, H, W]
@@ -36,19 +37,18 @@ class CrossEntropyFocalLoss(nn.Module):
             loss = loss.sum()
         return loss
 
+
 class PerClassBCEFocalLosswithLogits(nn.Module):    # namely multi-label classification
-    def __init__(self, gamma=0.2, alpha=0.6, reduction='mean'):
+    def __init__(self, gamma=2, alpha=0.6, reduction='mean'):
         super(PerClassBCEFocalLosswithLogits, self).__init__()
         self.gamma = gamma
         self.alpha = alpha
         self.reduction = reduction
 
+    # ignore the 'None' tag, sum from index one
     def forward(self, logits, target):
         # logits: [N, F], target: [1, N]
-        # logits = torch.clamp(logits, -5, 5)  # avoid overflow after sigmoid computation in the val phase, remains for observation
-        if not self.training:
-            logits = torch.clamp(logits, -5, 5)  # avoid overflow after sigmoid computation in the val phase, remains for observation
-        logits = torch.sigmoid(logits)
+        logits = torch.sigmoid(logits).clamp(1e-6, 1-1e-6)
         alpha = self.alpha
         gamma = self.gamma
 
